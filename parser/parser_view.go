@@ -96,6 +96,22 @@ func (p *Parser) parseCreateMaterializedView(pos Pos) (*CreateMaterializedView, 
 			}
 			createMaterializedView.Destination.TableSchema = tableSchema
 		}
+	case p.matchTokenKind(TokenKindLParen):
+		// Column list before ENGINE (e.g. SHOW CREATE TABLE output for RMVs with ENGINE = Memory)
+		tableSchema, err := p.parseTableSchemaClause(p.Pos())
+		if err != nil {
+			return nil, err
+		}
+		createMaterializedView.TableSchema = tableSchema
+		if !p.matchKeyword(KeywordEngine) {
+			return nil, fmt.Errorf("unexpected token: %q, expected ENGINE after column list", p.lastTokenKind())
+		}
+		engineExpr, err := p.parseEngineExpr(p.Pos())
+		if err != nil {
+			return nil, err
+		}
+		createMaterializedView.Engine = engineExpr
+		createMaterializedView.StatementEnd = engineExpr.End()
 	case p.matchKeyword(KeywordEngine):
 		engineExpr, err := p.parseEngineExpr(p.Pos())
 		if err != nil {

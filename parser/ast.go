@@ -1356,6 +1356,7 @@ type CreateMaterializedView struct {
 	Settings     *SettingsClause
 	HasAppend    bool
 	Engine       *EngineExpr
+	TableSchema  *TableSchemaClause // column list for ENGINE-based MVs (no TO clause)
 	HasEmpty     bool
 	Destination  *DestinationClause
 	SubQuery     *SubQuery
