@@ -230,6 +230,10 @@ func (a *AlterTable) FormatSQL(formatter *Formatter) {
 			formatter.WriteString(",")
 		}
 	}
+	if a.Settings != nil {
+		formatter.Break()
+		formatter.WriteExpr(a.Settings)
+	}
 }
 
 func (a *AlterTableAddColumn) FormatSQL(formatter *Formatter) {
@@ -242,18 +246,14 @@ func (a *AlterTableAddColumn) FormatSQL(formatter *Formatter) {
 		formatter.WriteString(" AFTER ")
 		formatter.WriteExpr(a.After)
 	}
-	if a.Settings != nil {
-		formatter.Break()
-		formatter.WriteExpr(a.Settings)
-	}
 }
 
 func (a *AlterTableAddIndex) FormatSQL(formatter *Formatter) {
-	formatter.WriteString("ADD ")
+	formatter.WriteString("ADD INDEX ")
 	if a.IfNotExists {
 		formatter.WriteString("IF NOT EXISTS ")
 	}
-	formatter.WriteExpr(a.Index)
+	a.Index.formatDefinition(formatter)
 	if a.After != nil {
 		formatter.WriteString(" AFTER ")
 		formatter.WriteExpr(a.After)
@@ -333,10 +333,6 @@ func (a *AlterTableDelete) FormatSQL(formatter *Formatter) {
 func (a *AlterTableDetachPartition) FormatSQL(formatter *Formatter) {
 	formatter.WriteString("DETACH ")
 	formatter.WriteExpr(a.Partition)
-	if a.Settings != nil {
-		formatter.Break()
-		formatter.WriteExpr(a.Settings)
-	}
 }
 
 func (a *AlterTableDropColumn) FormatSQL(formatter *Formatter) {
@@ -361,10 +357,6 @@ func (a *AlterTableDropPartition) FormatSQL(formatter *Formatter) {
 		formatter.WriteString("DETACHED ")
 	}
 	formatter.WriteExpr(a.Partition)
-	if a.Settings != nil {
-		formatter.Break()
-		formatter.WriteExpr(a.Settings)
-	}
 }
 
 func (a *AlterTableDropProjection) FormatSQL(formatter *Formatter) {
@@ -2015,6 +2007,10 @@ func (n *NullLiteral) FormatSQL(formatter *Formatter) {
 }
 
 func (n *NumberLiteral) FormatSQL(formatter *Formatter) {
+	// Keep a signed literal from joining a preceding minus into a comment.
+	if strings.HasPrefix(n.Literal, "-") && strings.HasSuffix(formatter.String(), "-") {
+		formatter.WriteByte(whitespace)
+	}
 	formatter.WriteString(n.Literal)
 }
 
@@ -2656,6 +2652,12 @@ func (t *TableIdentifier) FormatSQL(formatter *Formatter) {
 func (a *TableIndex) FormatSQL(formatter *Formatter) {
 	formatter.WriteString("INDEX")
 	formatter.WriteByte(whitespace)
+	a.formatDefinition(formatter)
+}
+
+// formatDefinition writes everything after the INDEX keyword, so ALTER TABLE
+// can place IF NOT EXISTS between INDEX and the index name.
+func (a *TableIndex) formatDefinition(formatter *Formatter) {
 	formatter.WriteExpr(a.Name)
 	// Add space only if column expression doesn't start with '('
 	columnExprStr := Format(a.ColumnExpr)
@@ -2759,6 +2761,18 @@ func (s *TypeWithParams) FormatSQL(formatter *Formatter) {
 	formatter.WriteByte(')')
 }
 
+func (s *TypeWithNamedParams) FormatSQL(formatter *Formatter) {
+	formatter.WriteExpr(s.Name)
+	formatter.WriteByte('(')
+	for i, param := range s.Params {
+		if i > 0 {
+			formatter.WriteString(", ")
+		}
+		formatter.WriteExpr(param)
+	}
+	formatter.WriteByte(')')
+}
+
 func (t *TypedPlaceholder) FormatSQL(formatter *Formatter) {
 	formatter.WriteString("{")
 	formatter.WriteExpr(t.Name)
@@ -2773,8 +2787,14 @@ func (u *UUID) FormatSQL(formatter *Formatter) {
 }
 
 func (n *UnaryExpr) FormatSQL(formatter *Formatter) {
+	// Adjacent unary minuses must not become a line comment.
+	if n.Kind == TokenKindMinus && strings.HasSuffix(formatter.String(), "-") {
+		formatter.WriteByte(whitespace)
+	}
 	formatter.WriteString(string(n.Kind))
-	formatter.WriteByte(whitespace)
+	if n.Kind != TokenKindPlus && n.Kind != TokenKindMinus {
+		formatter.WriteByte(whitespace)
+	}
 	formatter.WriteExpr(n.Expr)
 }
 

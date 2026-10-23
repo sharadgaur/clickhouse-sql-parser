@@ -202,6 +202,9 @@ type AlterTable struct {
 	TableIdentifier *TableIdentifier
 	OnCluster       *ClusterClause
 	AlterExprs      []AlterTableClause
+	// Settings holds the query-level SETTINGS clause. ClickHouse only
+	// accepts it once, after the last alter clause.
+	Settings *SettingsClause
 }
 
 func (a *AlterTable) Pos() Pos {
@@ -230,6 +233,11 @@ func (a *AlterTable) Accept(visitor ASTVisitor) error {
 
 	for _, expr := range a.AlterExprs {
 		if err := expr.Accept(visitor); err != nil {
+			return err
+		}
+	}
+	if a.Settings != nil {
+		if err := a.Settings.Accept(visitor); err != nil {
 			return err
 		}
 	}
@@ -275,7 +283,6 @@ func (a *AlterTableAttachPartition) Accept(visitor ASTVisitor) error {
 type AlterTableDetachPartition struct {
 	DetachPos Pos
 	Partition *PartitionClause
-	Settings  *SettingsClause
 }
 
 func (a *AlterTableDetachPartition) Pos() Pos {
@@ -296,11 +303,6 @@ func (a *AlterTableDetachPartition) Accept(visitor ASTVisitor) error {
 	if err := a.Partition.Accept(visitor); err != nil {
 		return err
 	}
-	if a.Settings != nil {
-		if err := a.Settings.Accept(visitor); err != nil {
-			return err
-		}
-	}
 	return visitor.VisitAlterTableDetachPartition(a)
 }
 
@@ -308,7 +310,6 @@ type AlterTableDropPartition struct {
 	DropPos     Pos
 	HasDetached bool
 	Partition   *PartitionClause
-	Settings    *SettingsClause
 }
 
 func (a *AlterTableDropPartition) Pos() Pos {
@@ -316,9 +317,6 @@ func (a *AlterTableDropPartition) Pos() Pos {
 }
 
 func (a *AlterTableDropPartition) End() Pos {
-	if a.Settings != nil {
-		return a.Settings.End()
-	}
 	return a.Partition.End()
 }
 
@@ -331,11 +329,6 @@ func (a *AlterTableDropPartition) Accept(visitor ASTVisitor) error {
 	defer visitor.Leave(a)
 	if err := a.Partition.Accept(visitor); err != nil {
 		return err
-	}
-	if a.Settings != nil {
-		if err := a.Settings.Accept(visitor); err != nil {
-			return err
-		}
 	}
 	return visitor.VisitAlterTableDropPartition(a)
 }
@@ -444,7 +437,6 @@ type AlterTableAddColumn struct {
 	Column      *ColumnDef
 	IfNotExists bool
 	After       *NestedIdentifier
-	Settings    *SettingsClause
 }
 
 func (a *AlterTableAddColumn) Pos() Pos {
@@ -452,9 +444,6 @@ func (a *AlterTableAddColumn) Pos() Pos {
 }
 
 func (a *AlterTableAddColumn) End() Pos {
-	if a.Settings != nil {
-		return a.Settings.End()
-	}
 	return a.StatementEnd
 }
 
@@ -470,11 +459,6 @@ func (a *AlterTableAddColumn) Accept(visitor ASTVisitor) error {
 	}
 	if a.After != nil {
 		if err := a.After.Accept(visitor); err != nil {
-			return err
-		}
-	}
-	if a.Settings != nil {
-		if err := a.Settings.Accept(visitor); err != nil {
 			return err
 		}
 	}
@@ -2958,7 +2942,7 @@ func (q *QueryParam) Pos() Pos {
 }
 
 func (q *QueryParam) End() Pos {
-	return q.RBracePos
+	return q.RBracePos + 1
 }
 
 func (q *QueryParam) Accept(visitor ASTVisitor) error {
@@ -3031,7 +3015,7 @@ func (f *FunctionExpr) Pos() Pos {
 }
 
 func (f *FunctionExpr) End() Pos {
-	return f.Params.RightParenPos
+	return f.Params.RightParenPos + 1
 }
 
 func (f *FunctionExpr) Accept(visitor ASTVisitor) error {
@@ -3434,6 +3418,39 @@ func (s *TypeWithParams) Accept(visitor ASTVisitor) error {
 }
 
 func (s *TypeWithParams) Type() string {
+	return s.Name.Name
+}
+
+type TypeWithNamedParams struct {
+	LeftParenPos  Pos
+	RightParenPos Pos
+	Name          *Ident
+	Params        []*NamedParameterExpr
+}
+
+func (s *TypeWithNamedParams) Pos() Pos {
+	return s.Name.NamePos
+}
+
+func (s *TypeWithNamedParams) End() Pos {
+	return s.RightParenPos
+}
+
+func (s *TypeWithNamedParams) Accept(visitor ASTVisitor) error {
+	visitor.Enter(s)
+	defer visitor.Leave(s)
+	if err := s.Name.Accept(visitor); err != nil {
+		return err
+	}
+	for _, param := range s.Params {
+		if err := param.Accept(visitor); err != nil {
+			return err
+		}
+	}
+	return visitor.VisitTypeWithNamedParams(s)
+}
+
+func (s *TypeWithNamedParams) Type() string {
 	return s.Name.Name
 }
 

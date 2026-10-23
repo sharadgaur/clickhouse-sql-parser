@@ -19,8 +19,8 @@
     "OnCluster": {
       "OnPos": 24,
       "Expr": {
-        "LiteralPos": 36,
-        "LiteralEnd": 51,
+        "LiteralPos": 35,
+        "LiteralEnd": 52,
         "Literal": "default_cluster"
       }
     },
@@ -30,6 +30,7 @@
         "StatementEnd": 59,
         "Partition": null
       }
-    ]
+    ],
+    "Settings": null
   }
 ]

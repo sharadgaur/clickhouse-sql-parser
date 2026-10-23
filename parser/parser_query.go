@@ -25,7 +25,14 @@ func (p *Parser) parseWithClause(pos Pos) (*WithClause, error) {
 		return nil, err
 	}
 	ctes := []*CTEStmt{cteExpr}
-	for p.tryConsumeTokenKind(TokenKindComma) != nil {
+	for {
+		token, consumeErr := p.tryConsumeTokenKind(TokenKindComma)
+		if consumeErr != nil {
+			return nil, consumeErr
+		}
+		if token == nil {
+			break
+		}
 		cteExpr, err := p.parseCTEStmt(p.Pos())
 		if err != nil {
 			return nil, err
@@ -151,7 +158,11 @@ func (p *Parser) tryParseJoinConstraints(pos Pos) (Expr, error) {
 			On:    columnExprList,
 		}, nil
 	case p.tryConsumeKeywords(KeywordUsing):
-		hasParen := p.tryConsumeTokenKind(TokenKindLParen) != nil
+		lparen, consumeErr := p.tryConsumeTokenKind(TokenKindLParen)
+		if consumeErr != nil {
+			return nil, consumeErr
+		}
+		hasParen := lparen != nil
 		columnExprList, err := p.parseColumnExprListWithLParen(p.Pos())
 		if err != nil {
 			return nil, err
@@ -335,8 +346,12 @@ func (p *Parser) peekJoinAfterLocality() bool {
 func (p *Parser) parseJoinRightExpr(pos Pos) (expr Expr, err error) {
 	var rightExpr Expr
 	var modifiers []string
+	comma, err := p.tryConsumeTokenKind(TokenKindComma)
+	if err != nil {
+		return nil, err
+	}
 	switch {
-	case p.tryConsumeTokenKind(TokenKindComma) != nil:
+	case comma != nil:
 		return p.parseJoinExpr(p.Pos())
 	default:
 		// GLOBAL/LOCAL only says how the right-hand table is distributed, so
@@ -357,7 +372,9 @@ func (p *Parser) parseJoinRightExpr(pos Pos) (expr Expr, err error) {
 	modifiers = append(modifiers, KeywordJoin)
 
 	// Check if this is an ARRAY JOIN
-	if slices.Contains(modifiers, KeywordArray) {
+	if slices.ContainsFunc(modifiers, func(modifier string) bool {
+		return strings.EqualFold(modifier, KeywordArray)
+	}) {
 		// For ARRAY JOIN, parse column expression list instead of table expression
 		expr, err = p.parseColumnExprList(p.Pos())
 		if err != nil {
@@ -641,7 +658,9 @@ func (p *Parser) parseLimitClause(pos Pos) (*LimitClause, error) {
 
 		if p.tryConsumeKeywords(KeywordOffset) {
 			offset, err = p.parseExpr(p.Pos())
-		} else if p.tryConsumeTokenKind(TokenKindComma) != nil {
+		} else if token, consumeErr := p.tryConsumeTokenKind(TokenKindComma); consumeErr != nil {
+			return nil, consumeErr
+		} else if token != nil {
 			offset = limit
 			limit, err = p.parseExpr(p.Pos())
 		}
@@ -672,7 +691,7 @@ func (p *Parser) parseBetweenClause(expr Expr, not bool) (*BetweenClause, error)
 		return nil, err
 	}
 
-	betweenExpr, err := p.parseSubExpr(p.Pos(), PrecedenceBetweenLike)
+	betweenExpr, err := p.parseSubExpr(p.Pos(), operatorPrecedence(TokenKind(KeywordBetween)))
 	if err != nil {
 		return nil, err
 	}
@@ -682,7 +701,7 @@ func (p *Parser) parseBetweenClause(expr Expr, not bool) (*BetweenClause, error)
 		return nil, err
 	}
 
-	andExpr, err := p.parseSubExpr(p.Pos(), PrecedenceBetweenLike)
+	andExpr, err := p.parseSubExpr(p.Pos(), operatorPrecedence(TokenKind(KeywordBetween)))
 	if err != nil {
 		return nil, err
 	}
@@ -988,7 +1007,9 @@ func (p *Parser) parseWindowClause(pos Pos) (*WindowClause, error) {
 			Expr:  condition,
 		})
 
-		if p.tryConsumeTokenKind(TokenKindComma) == nil {
+		if token, consumeErr := p.tryConsumeTokenKind(TokenKindComma); consumeErr != nil {
+			return nil, consumeErr
+		} else if token == nil {
 			break
 		}
 	}
@@ -1030,7 +1051,11 @@ func (p *Parser) parseHavingClause(pos Pos) (*HavingClause, error) {
 
 func (p *Parser) parseSubQuery(_ Pos) (*SubQuery, error) {
 
-	hasParen := p.tryConsumeTokenKind(TokenKindLParen) != nil
+	lparen, consumeErr := p.tryConsumeTokenKind(TokenKindLParen)
+	if consumeErr != nil {
+		return nil, consumeErr
+	}
+	hasParen := lparen != nil
 
 	selectQuery, err := p.parseSelectQuery(p.Pos())
 	if err != nil {
@@ -1055,7 +1080,9 @@ func (p *Parser) parseSelectQuery(_ Pos) (*SelectQuery, error) {
 
 	var selectStmt *SelectQuery
 	var err error
-	if lparen := p.tryConsumeTokenKind(TokenKindLParen); lparen != nil {
+	if lparen, consumeErr := p.tryConsumeTokenKind(TokenKindLParen); consumeErr != nil {
+		return nil, consumeErr
+	} else if lparen != nil {
 		inner, err := p.parseSelectQuery(p.Pos())
 		if err != nil {
 			return nil, err
@@ -1123,12 +1150,14 @@ func (p *Parser) parseSetOperation(selectStmt *SelectQuery) error {
 				return err
 			}
 			selectStmt.UnionAll = unionAllExpr
+			selectStmt.StatementEnd = unionAllExpr.End()
 		case p.tryConsumeKeywords(KeywordDistinct):
 			unionDistinctExpr, err := p.parseSelectQuery(p.Pos())
 			if err != nil {
 				return err
 			}
 			selectStmt.UnionDistinct = unionDistinctExpr
+			selectStmt.StatementEnd = unionDistinctExpr.End()
 		default:
 			return fmt.Errorf("expected ALL or DISTINCT, got %s", p.currentTokenKind())
 		}
@@ -1138,12 +1167,14 @@ func (p *Parser) parseSetOperation(selectStmt *SelectQuery) error {
 			return err
 		}
 		selectStmt.Except = exceptExpr
+		selectStmt.StatementEnd = exceptExpr.End()
 	case p.tryConsumeKeywords(KeywordIntersect):
 		intersectExpr, err := p.parseSelectQuery(p.Pos())
 		if err != nil {
 			return err
 		}
 		selectStmt.Intersect = intersectExpr
+		selectStmt.StatementEnd = intersectExpr.End()
 	}
 
 	return nil
@@ -1172,11 +1203,11 @@ func (p *Parser) parseSelectStmt(pos Pos) (*SelectQuery, error) { // nolint: fun
 	if err != nil {
 		return nil, err
 	}
-
-	statementEnd := pos
-	if len(selectItems) > 0 {
-		statementEnd = selectItems[len(selectItems)-1].End()
+	if len(selectItems) == 0 {
+		return nil, fmt.Errorf("expected SELECT expression")
 	}
+
+	statementEnd := selectItems[len(selectItems)-1].End()
 	from, err := p.tryParseFromClause(p.Pos())
 	if err != nil {
 		return nil, err
@@ -1317,7 +1348,9 @@ func (p *Parser) parseCTEStmt(pos Pos) (*CTEStmt, error) {
 	if err := p.expectKeyword(KeywordAs); err != nil {
 		return nil, err
 	}
-	if p.tryConsumeTokenKind(TokenKindLParen) != nil {
+	if token, consumeErr := p.tryConsumeTokenKind(TokenKindLParen); consumeErr != nil {
+		return nil, consumeErr
+	} else if token != nil {
 		selectQuery, err := p.parseSelectQuery(p.Pos())
 		if err != nil {
 			return nil, err
